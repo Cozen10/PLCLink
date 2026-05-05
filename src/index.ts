@@ -9,3 +9,7 @@ const connectOpts = {
 socket.connect(connectOpts, () => {
     console.log("Connected");
 });
+
+function read(socketObj: net.Socket, register: number) {
+
+};
