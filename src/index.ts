@@ -8,7 +8,8 @@ const connectOpts = {
 
 socket.connect(connectOpts, () => {
     console.log("Connected");
-    read(socket, 1);
+    const Data = read(socket, 1);
+    console.log(Data)
 });
 
 function read(socketObj: net.Socket, register: number) {
@@ -24,12 +25,10 @@ function read(socketObj: net.Socket, register: number) {
     buffer.writeUint16BE(register, 8);
     buffer.writeUInt16BE(0x0001, 10);
 
-    console.log(buffer);
     socketObj.write(buffer);
 
     socketObj.on('data', (data: Buffer) => {
         if (data.readInt16BE(0) != buffer.readInt16BE(0)) return
-        console.log(data);
 
         let RegistersValues: number[] = [];
 
