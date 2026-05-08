@@ -43,7 +43,7 @@ class PLC {
         });
     };
 
-    async read(registers: number | number[]) {
+    private async readRegisters(registers: number | number[], functionCode: number) {
         let CollectiveData: Record<number, Promise<any>> = {};
 
         if (!(Array.isArray(registers))) registers = [registers];
@@ -58,7 +58,7 @@ class PLC {
                 buffer.writeUInt16BE(0x0006, 4);
                 buffer.writeUInt8(this.Unit, 6);
             
-                buffer.writeUint8(0x03, 7);
+                buffer.writeUint8(functionCode, 7);
                 
                 buffer.writeUint16BE(register, 8);
                 buffer.writeUInt16BE(0x0001, 10);
@@ -87,6 +87,14 @@ class PLC {
         return CleanData;
     };
 
+    async read(registers: number | number[]) {
+        return await this.readRegisters(registers, 0x03)
+    };
+
+    async readInput(registers: number | number[]) {
+        return await this.readRegisters(registers, 0x04)
+    };
+
     write(register: number, value: number) {
         const TransactionId = Math.floor(Math.random() * 65535);
 
@@ -104,5 +112,14 @@ class PLC {
         this.Socket.write(buffer);
     };
 };
+
+(async () => {
+    const plc = new PLC({ host: "127.0.0.1" });
+    plc.connect();
+    plc.write(1, 54)
+
+    const data = await plc.read(1);
+    console.log(data);
+})();
 
 export default PLC
