@@ -119,7 +119,8 @@ class PLC {
     plc.write(1, 54)
 
     const data = await plc.read(1);
-    console.log(data);
+    const data2 = await plc.readInput(1);
+    console.log(data, data2);
 })();
 
 export default PLC
