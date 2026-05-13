@@ -123,16 +123,16 @@ Writes a number to a holding register.
 ### `plc.writeCoil(coil, value)`
 Writes a boolean or `0xFF00`/`0x0000` to a coil.
 
-### `plc.watch(addresses, callback, interval)`
+### `plc.watch(registers, callback, interval)`
 Fires callback every time the specified Holding Registers change value.
 
-### `plc.watchInputs(addresses, callback, interval)`
+### `plc.watchInputs(registers, callback, interval)`
 Fires callback every time the specified Input Registers change value.
 
-### `plc.watchCoils(addresses, callback, interval)`
+### `plc.watchCoils(coils, callback, interval)`
 Fires callback every time the specified Coils change state.
 
-### `plc.watchDiscreteInputs(addresses, callback, interval)`
+### `plc.watchDiscreteInputs(discreteInputs, callback, interval)`
 Fires callback every time the specified Discrete Inputs change state.
 
 ### `Watcher Instance`
