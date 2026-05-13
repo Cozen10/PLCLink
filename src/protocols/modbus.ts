@@ -1,14 +1,9 @@
-import net from 'net';
+import { PLCContext } from '../Types.js';
 
-interface PLCContext {
-    Socket: net.Socket;
-    PendingReads: Map<number, Function>;
-    PendingWrites: Map<number, Function>;
-    SavedBuffer: Buffer;
-    Unit: number;
-}
+export async function writeAddress(ctx: PLCContext, address: number | string, value: number, functionCode: number) {    
+    const numericAddress: number = Number(address)
+    if (numericAddress === undefined || isNaN(numericAddress)) return;
 
-export async function writeAddress(ctx: PLCContext, address: number, value: number, functionCode: number) {    
     return await new Promise((resolve) => {
         const TransactionId = Math.floor(Math.random() * 65535);
         
@@ -20,7 +15,7 @@ export async function writeAddress(ctx: PLCContext, address: number, value: numb
     
         buffer.writeUint8(functionCode, 7);
         
-        buffer.writeUint16BE(address, 8);
+        buffer.writeUint16BE(numericAddress, 8);
         buffer.writeUint16BE(value, 10);
     
         ctx.PendingWrites.set(TransactionId, resolve);
@@ -29,12 +24,11 @@ export async function writeAddress(ctx: PLCContext, address: number, value: numb
     });
 };
 
-export async function readAddress(ctx: PLCContext, addresses: number | number[], functionCode: number) {
+export async function readAddress(ctx: PLCContext, addresses: number | string | (number | string)[], functionCode: number) {
+    const numericAddresses: number[] = (Array.isArray(addresses) ? addresses : [addresses]).map(a => Number(a));
     let CollectiveData: Record<number, Promise<any>> = {};
 
-    if (!(Array.isArray(addresses))) addresses = [addresses];
-
-    for (const register of addresses) {
+    for (const register of numericAddresses) {
         CollectiveData[register] = new Promise((resolve) => {
             const TransactionId = Math.floor(Math.random() * 65535);
         
@@ -65,7 +59,7 @@ export async function readAddress(ctx: PLCContext, addresses: number | number[],
     let CleanData: Record<number, any> = {};
 
     let Count = 0
-    for (const address of addresses) {
+    for (const address of numericAddresses) {
         CleanData[address] = CleanValues[Count]
         Count++;
     };

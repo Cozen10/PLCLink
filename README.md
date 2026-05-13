@@ -64,6 +64,29 @@ for (const [address, result] of Object.entries(coils)) {
     console.log(`Coil ${address}: ${result.AddressValues[0] ? 'ON' : 'OFF'}`)
 }
 ```
+### Using the Watcher (New in v2)
+Monitor specific registers and react only when the value changes:
+```javascript
+import PLC from 'plclink';
+
+const plc = new PLC({ host: "127.0.0.1" });
+await plc.connect();
+
+// Watch registers 1, 5, and 10 every 500ms
+const watcher = await plc.watch([1, 5, 10], (changes) => {
+    console.log("Changes detected!");
+    for (const [address, data] of Object.entries(changes)) {
+        console.log(`Address ${address} went from ${data.PrevValue} to ${data.Value}`);
+    }
+}, 500);
+
+// You can manage the stream without destroying the interval
+watcher.pause();
+watcher.resume();
+
+watcher.stop();
+```
+
 ## Supported Protocols
 - Modbus TCP
 - S7 (Soon)
@@ -99,4 +122,24 @@ Writes a number to a holding register.
 
 ### `plc.writeCoil(coil, value)`
 Writes a boolean or `0xFF00`/`0x0000` to a coil.
+
+### `plc.watch(addresses, callback, interval)`
+Fires callback every time the specified Holding Registers change value.
+
+### `plc.watchInputs(addresses, callback, interval)`
+Fires callback every time the specified Input Registers change value.
+
+### `plc.watchCoils(addresses, callback, interval)`
+Fires callback every time the specified Coils change state.
+
+### `plc.watchDiscreteInputs(addresses, callback, interval)`
+Fires callback every time the specified Discrete Inputs change state.
+
+### `Watcher Instance`
+| Method | Description |
+|--------|-------------|
+| `.pause()` | Stops firing the callback but keeps polling the PLC. |
+| `.resume()` | Resumes firing the callback when changes are detected. |
+| `.stop()` | Clears the interval and stops the watcher completely. |
+
 ## Created and distributed by Cozen10 (Anastasios Fountoglou)
