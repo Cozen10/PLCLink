@@ -8,4 +8,4 @@ export interface PLCContext {
     Unit: number;
 };
 
-export interface ImportedProtocol { readAddress: Function, writeAddress: Function, onData: Function, watchAddress: Function };
+export interface ImportedProtocol { readAddress: Function, writeAddress: Function, onData: Function };

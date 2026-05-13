@@ -1,4 +1,3 @@
-import net from 'net';
 import { ImportedProtocol, PLCContext } from './Types.js';
 
 /**
@@ -11,6 +10,7 @@ class Watcher {
     callback: (changes: Record<number, { PrevValue: number, Value: number }>) => void;
     isMuted: boolean = false;
 
+    functionCode!: number;
     intervalId!: ReturnType<typeof setInterval>;
 
     constructor (context: PLCContext, Protocol: ImportedProtocol, Callback: (changes: Record<number, { PrevValue: number, Value: number }>) => void) {
@@ -21,6 +21,7 @@ class Watcher {
 
     lastData!: Record<number, { Data: Buffer, AddressValues: [number] }>;
     async start(addresses: (string | number)[], interval: number, FunctionCode: number) {
+        this.functionCode = FunctionCode
         this.lastData = await this.protocol.readAddress(this.context, addresses, FunctionCode);
 
         this.intervalId = setInterval(async () => {
@@ -92,7 +93,9 @@ class Watcher {
 
     console.log("Watcher is active again!");
      */
-    resume() {
+    async resume() {
+        this.lastData = await this.protocol.readAddress(this.context, Object.keys(this.lastData).map(Number), this.functionCode);
+
         this.isMuted = false;
     };
 };
