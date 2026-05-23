@@ -6,6 +6,9 @@ export interface PLCContext {
     PendingWrites: Map<number, Function>;
     SavedBuffer: Buffer;
     Unit: number;
+    intenionalDisconnect: Boolean;
+    emit: Function;
+    Protocol: string;
 };
 
-export interface ImportedProtocol { readAddress: Function, writeAddress: Function, onData: Function };
+export interface ImportedProtocol { readAddress: Function, writeAddress: Function, onData: Function, disconnect: Function };

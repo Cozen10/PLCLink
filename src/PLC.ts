@@ -1,4 +1,5 @@
 import net from 'net';
+import EventEmitter from 'events';
 import Watcher from './Watcher.js';
 import { ImportedProtocol } from './Types.js';
 
@@ -14,17 +15,28 @@ import { ImportedProtocol } from './Types.js';
  * await plc.connect();
  * console.log(await plc.read(1))
  */
-class PLC {
+class PLC extends EventEmitter {
     Host: string;
     Port: number;
     Unit: number;
     Protocol: string;
     connectOpts;
 
-    constructor({ host, port = 502, unit = 1, protocol = "modbus" }: { host: string, port?: number, unit?: number, protocol?: string }) {
+    MaxRetries: number;
+    RetryDelay: number;
+    isConnected: boolean = false;
+    isReconnecting: boolean = false;
+    hasConnectedBefore: boolean = false;
+    intenionalDisconnect: boolean = false;
+
+    constructor({ host, port = 502, unit = 1, protocol = "modbus", maxRetries = 10, retryDelay = 5000 }: { host: string, port?: number, unit?: number, protocol?: string, maxRetries?: number, retryDelay?: number }) {
+        super()
+
         this.Host = host;
         this.Port = port;
         this.Unit = unit;
+        this.MaxRetries = maxRetries
+        this.RetryDelay = retryDelay
         this.Protocol = protocol;
         this.connectOpts = {"host": this.Host,"port": this.Port};
     };
@@ -33,9 +45,70 @@ class PLC {
     PendingReads = new Map<number, Function>();
     PendingWrites = new Map<number, Function>();
 
+    private queue: { 
+        execute: () => Promise<void>; 
+        resolve: (val: any) => void; 
+        reject: (err: any) => void; 
+    }[] = [];
+    private isProcessingQueue = false;
+
     SavedBuffer: Buffer = Buffer.alloc(0);
 
     ImportedProtocol!: ImportedProtocol;
+
+    private async handleAutoReconnect() {
+        if (this.isReconnecting) return;
+        if (!this.hasConnectedBefore) return;
+
+        this.isReconnecting = true
+
+        this.emit("disconnect");
+        console.warn(`PLC disconnected. Starting auto-reconnect...`);
+        
+        const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+        for (let currentRetries = 1; currentRetries <= this.MaxRetries; currentRetries++) {
+            try {
+                console.log(`Connection attempt ${currentRetries}/${this.MaxRetries}...`);
+
+                await this.connect(); 
+                
+                console.log("Successfully reconnected to PLC");
+                this.isReconnecting = false;
+
+                return;
+            } catch (error) {
+                this.emit("error", error)
+                console.warn(`Retry ${currentRetries} failed. Auto-retrying in ${this.RetryDelay / 1000} seconds...`);
+
+                if (currentRetries === this.MaxRetries) {
+                    this.emit("death");
+                    console.error("Max retries reached. PLC connection marked as permanently dead");
+                    this.isReconnecting = false;
+
+                    return;
+                };
+
+                await delay(this.RetryDelay);
+            };
+        };
+    };
+
+    private async processNextQueueItem() {
+        if (this.isProcessingQueue || this.queue.length === 0) return;
+
+        this.isProcessingQueue = true;
+        const item = this.queue.shift()!;
+
+        try {
+            const result = await item.execute();
+            item.resolve(result);
+        } catch (error) {
+            item.reject(error);
+        } finally {
+            this.isProcessingQueue = false;
+            this.processNextQueueItem();
+        }
+    }
 
     /**
      * Connects to the PLC and loads the protocol driver.
@@ -45,18 +118,85 @@ class PLC {
      * await plc.connect();
      */
     async connect() {
-        return await new Promise((resolve) => {
+        if (this.isConnected) return;
+        this.Socket.removeAllListeners('close');
+        this.Socket.once('close', (hadError: boolean) => {
+            this.isConnected = false
+            if (this.intenionalDisconnect) {
+                this.intenionalDisconnect = false;
+                return;
+            };
+
+            this.handleAutoReconnect();
+        });
+
+        return await new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                this.emit("error", new Error("PLC_CONNECTION_TIMEOUT"))
+                reject("Connection Timedout");
+                this.Socket.removeAllListeners('close');
+                this.Socket.destroy();
+
+                return;
+            }, 5000);
+            this.Socket.once('error', (error) => {
+                if (this.Socket.destroyed) return;
+                this.emit("error", error)
+                clearTimeout(timer);
+                reject(error);
+                
+                return;
+            });
             this.Socket.connect(this.connectOpts, async () => {
-                this.ImportedProtocol = await import(`./protocols/${this.Protocol}.js`);
+                if (this.Socket.destroyed) return;
+                this.Socket.removeAllListeners('error');
+                clearTimeout(timer);
+                
+                try {
+                    this.ImportedProtocol = await import(`./protocols/${this.Protocol}.js`);
+                } catch (error) {
+                    reject(error);
+                    this.Socket.destroy();
+
+                    return;
+                };
+
+                this.Socket.removeAllListeners('data');
+
+                this.hasConnectedBefore = true
+                this.isConnected = true
 
                 this.Socket.on('data', (data: Buffer) => {
                     this.ImportedProtocol.onData(this, data);
                 });
 
-                resolve(true)
+                if (this.isReconnecting) {
+                    this.emit("reconnect");
+                } else {
+                    this.emit("connect");
+                }
+
+                resolve(true);
             });
         });
     };
+
+    /**
+     * Cleanly closes/disconnects the connection between itself and the PLC.
+     * @example
+     * plc.disconnect();
+     */
+    disconnect() {
+        this.intenionalDisconnect = true;
+        return this.ImportedProtocol.disconnect(this).then((result: any) => {
+            this.emit("disconnect");
+            console.log("PLC disconnected");
+        }).catch((err: Error) => {
+            this.intenionalDisconnect = false;
+            this.emit("error", err)
+            console.warn(err);
+        });
+    }
 
     /**
      * Reads Holding Registers' values from the connected PLC.
@@ -70,12 +210,21 @@ class PLC {
      * await plc.read([1,6,4])
      * // { '1': { Data: Buffer, AddressValues: [54] }, '6': { Data: Buffer, AddressValues: [23] }, '4': { Data: Buffer, AddressValues: [11] } }
      */
-    async read(registers: number | string | (number | string)[]) {
-        if (!this.ImportedProtocol) throw new Error("Not connected yet. Call connect() first.");
+    async read(registers: number | string | (number | string)[], timeout: number = 2500) {
+        if (!this.isConnected) throw new Error("Call connect() first!");
 
-        return await this.ImportedProtocol.readAddress(this, registers, 0x03);
+        return new Promise((resolve, reject) => {
+            this.queue.push({
+                execute: async () => {
+                    return await this.ImportedProtocol.readAddress(this, registers, 0x03);
+                },
+                resolve,
+                reject
+            });
+
+            this.processNextQueueItem();
+        });
     };
-
 
     /**
      * Reads Input Registers' values from the connected PLC.
@@ -90,9 +239,20 @@ class PLC {
      * await plc.readInputs([1, 6, 4]);
      * // { '1': { Data: Buffer, AddressValues: [54] }, '6': { Data: Buffer, AddressValues: [23] }, '4': { Data: Buffer, AddressValues: [11] } }
      */
-    async readInputs(registers: number | string | (number | string)[]) {
-        if (!this.ImportedProtocol) throw new Error("Not connected yet. Call connect() first.");
-        return await this.ImportedProtocol.readAddress(this, registers, 0x04);
+    async readInputs(registers: number | string | (number | string)[], timeout: number = 2500) {
+        if (!this.isConnected) throw new Error("Call connect() first!");
+
+        return new Promise((resolve, reject) => {
+            this.queue.push({
+                execute: async () => {
+                    return await this.ImportedProtocol.readAddress(this, registers, 0x04);
+                },
+                resolve,
+                reject
+            });
+
+            this.processNextQueueItem();
+        });
     };
 
     /**
@@ -108,9 +268,20 @@ class PLC {
      * await plc.readCoils([1, 6, 4]);
      * // { '1': { Data: Buffer, AddressValues: [1] }, '6': { Data: Buffer, AddressValues: [0] }, '4': { Data: Buffer, AddressValues: [1] } }
      */
-    async readCoils(coils: number | string | (number | string)[]) {
-        if (!this.ImportedProtocol) throw new Error("Not connected yet. Call connect() first.");
-        return await this.ImportedProtocol.readAddress(this, coils, 0x01);
+    async readCoils(coils: number | string | (number | string)[], timeout: number = 2500) {
+        if (!this.isConnected) throw new Error("Call connect() first!");
+
+        return new Promise((resolve, reject) => {
+            this.queue.push({
+                execute: async () => {
+                    return await this.ImportedProtocol.readAddress(this, coils, 0x01);
+                },
+                resolve,
+                reject
+            });
+
+            this.processNextQueueItem();
+        });
     };
 
     /**
@@ -126,9 +297,20 @@ class PLC {
      * await plc.readDiscreteInputs([1, 6, 4]);
      * // { '1': { Data: Buffer, AddressValues: [1] }, '6': { Data: Buffer, AddressValues: [0] }, '4': { Data: Buffer, AddressValues: [1] } }
      */
-    async readDiscreteInputs(discreteInputs: number | string | (number | string)[]) {
-        if (!this.ImportedProtocol) throw new Error("Not connected yet. Call connect() first.");
-        return await this.ImportedProtocol.readAddress(this, discreteInputs, 0x02);
+    async readDiscreteInputs(discreteInputs: number | string | (number | string)[], timeout: number = 2500) {
+        if (!this.isConnected) throw new Error("Call connect() first!");
+
+        return new Promise((resolve, reject) => {
+            this.queue.push({
+                execute: async () => {
+                    return await this.ImportedProtocol.readAddress(this, discreteInputs, 0x02);
+                },
+                resolve,
+                reject
+            });
+
+            this.processNextQueueItem();
+        });
     };
 
     /**
@@ -145,9 +327,19 @@ class PLC {
      * // { Status: 'success', Content: { Address: 5, Value: 1083 } }
      */
     async write(register: number | string, value: number) {
-        if (!this.ImportedProtocol) throw new Error("Not connected yet. Call connect() first.");
+        if (!this.isConnected) throw new Error("Call connect() first!");
 
-        return await this.ImportedProtocol.writeAddress(this, register, value, 0x06)
+        return new Promise((resolve, reject) => {
+            this.queue.push({
+                execute: async () => {
+                    return await this.ImportedProtocol.writeAddress(this, register, value, 0x06);
+                },
+                resolve,
+                reject
+            });
+
+            this.processNextQueueItem();
+        });
     };
 
     /**
@@ -167,10 +359,21 @@ class PLC {
      * // { Status: 'success', Content: { Address: 4, Value: 65280 } }
      */
     async writeCoil(coil: number | string, value: boolean | number) {
-        if (!this.ImportedProtocol) throw new Error("Not connected yet. Call connect() first.");
+        if (!this.isConnected) throw new Error("Call connect() first!");
 
         const BooleanToHex = value ? 0xFF00 : 0x0000;
-        return await this.ImportedProtocol.writeAddress(this, coil, BooleanToHex, 0x05)
+
+        return new Promise((resolve, reject) => {
+            this.queue.push({
+                execute: async () => {
+                    return await this.ImportedProtocol.writeAddress(this, coil, BooleanToHex, 0x05);
+                },
+                resolve,
+                reject
+            });
+
+            this.processNextQueueItem();
+        });
     };
 
     /**
