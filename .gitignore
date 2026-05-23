@@ -429,3 +429,4 @@ FodyWeavers.xsd
 *.msp
 
 dist/
+src/tests
